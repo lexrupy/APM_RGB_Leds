@@ -1,6 +1,5 @@
-
 #include <FastLED.h>
-//#include "PinChangeInterrupt.h"
+
 #define NUM_LEDS 2
 
 #define BRIGHTNESS  255  // Put 0 to switch off all leds
@@ -18,11 +17,21 @@
 #define MODE_ARMED_GPS 4
 
 
-const unsigned int pulse_width = 600;
+const unsigned int arm_gps_pulse_width = 500;
+const unsigned int warn_delay_time = 5000;
 
-unsigned long last_armed_status = 0;
-unsigned long last_gps_status = 0;
-unsigned long last_warn_status = 0;
+
+unsigned long last_arm_pulse = 0;
+unsigned long last_gps_pulse = 0;
+unsigned long last_warn_change = 0;
+
+// Lights flashing adjustment
+unsigned long previousMillis = 0;     // will store last time LED was updated
+unsigned long next_interval = 0;      // next interval
+
+int time_on = 20;
+int time_off = 80;
+int time_cycle = 600;
 
 bool armed = false;
 bool gpsfix = false;
@@ -73,26 +82,7 @@ CRGB led_status_on4[NUM_MODOS]           = { CRGB::Red,                CRGB::Bla
 CRGB led_status_off[NUM_MODOS]           = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black };
 
 
-// Lights flashing adjustment
-unsigned long previousMillis = 0;     // will store last time LED was updated
-unsigned long next_interval = 0;      // next interval
-
-int time_on = 20;
-int time_off = 80;
-int time_cycle = 400;
-
-
 void setup() {
-
-  #ifdef DEBUG
-  Serial.begin(57600);
-  #endif
-
-  //delay(5000); // sanity delay
-  FastLED.addLeds<WS2811, DATA_PIN_STATUS, GRB>(leds_status, 1);
-  FastLED.addLeds<WS2811, DATA_PIN_FRONT, GRB>(leds_front, NUM_LEDS);
-  FastLED.addLeds<WS2811, DATA_PIN_BACK, GRB>(leds_back, NUM_LEDS);
-  FastLED.setBrightness( BRIGHTNESS );
 
   //Arduino (Atmega) pins default to inputs, so they don't need to be explicitly declared as inputs
   PCICR |= (1 << PCIE2);    // set PCIE0 to enable PCMSK0 scan
@@ -100,6 +90,17 @@ void setup() {
   PCMSK2 |= (1 << PCINT19);  // set PCINT19 (digital input 3)to trigger an interrupt on state change
   PCMSK2 |= (1 << PCINT20);  // set PCINT20 (digital input 4)to trigger an interrupt on state change
   PCMSK2 |= (1 << PCINT21);  // set PCINT21 (digital input 5)to trigger an interrupt on state change
+
+  // Enable PullUp Resistors
+  digitalWrite(2, HIGH);
+  digitalWrite(3, HIGH);
+  digitalWrite(4, HIGH);
+
+  //delay(5000); // sanity delay
+  FastLED.addLeds<WS2811, DATA_PIN_STATUS, GRB>(leds_status, 1);
+  FastLED.addLeds<WS2811, DATA_PIN_FRONT, GRB>(leds_front, NUM_LEDS);
+  FastLED.addLeds<WS2811, DATA_PIN_BACK, GRB>(leds_back, NUM_LEDS);
+  FastLED.setBrightness( BRIGHTNESS );
 
   startupAnimation();
 }
@@ -121,42 +122,13 @@ void setMode(byte mode) {
       time_off = 80;
       time_cycle = 400;
     }
-    #ifdef DEBUG
-      switch(led_mode) {
-        case 0 :
-          Serial.println("MODE_WARNING");  
-          break;
-        case 1 :
-          Serial.println("MODE_DISARMED_NO_GPS");
-          break;
-        case 2:
-          Serial.println("MODE_DISARMED_GPS");
-          break;
-        case 3:
-          Serial.println("MODE_ARMED_NO_GPS");
-          break;
-        case 4:
-          Serial.println("MODE_ARMED_GPS");
-          break;
-      }
-      
-    #endif
-    
   }
 }
 
 void updateState(unsigned long currentTime) {
-  if (currentTime - last_armed_status >= pulse_width) {
-    armed = true;
-  } else armed = false;
-  
-  if (currentTime - last_gps_status >= pulse_width) {
-    gpsfix = true;
-  } else gpsfix = false;
-  
-  if (currentTime - last_warn_status >= pulse_width) {
-    warning = false;
-  } else warning = true;
+  if (currentTime - last_arm_pulse <= arm_gps_pulse_width) armed = false; else armed = true;
+  if (currentTime - last_gps_pulse <= arm_gps_pulse_width) gpsfix = false; else gpsfix = true;
+  if (currentTime - last_warn_change >= warn_delay_time) warning = false; else warning = true;
   
   if (warning) {
     setMode(MODE_WARNING);
@@ -176,35 +148,6 @@ void updateState(unsigned long currentTime) {
   }
   
 }
-
-#ifdef DEBUG
-void readCommand() {
-    String c;
-   while (Serial.available()) {
-     c = Serial.readString();
-   }
-   if (c == "0") {
-    setMode(MODE_WARNING);
-    Serial.println("Mode set to: WARNING");
-   } else if (c =="1") {
-    setMode(MODE_DISARMED_NO_GPS);
-    Serial.println("Mode set to: DISARMED_NO_GPS");
-   } else if (c == "2") {
-    setMode(MODE_DISARMED_GPS);
-    Serial.println("Mode set to: DISARMED_GPS_FIX");
-   } else  if (c == "3") {
-    setMode(MODE_ARMED_NO_GPS);
-    Serial.println("Mode set to: ARMED_NO_GPS");
-   } else if (c == "4") {
-    setMode(MODE_ARMED_GPS);
-    Serial.println("Mode set to: ARMED_GPS_FIX");
-   } else if (c == "f") {
-    front_lights_disabled = !front_lights_disabled;
-    if (front_lights_disabled) Serial.println("Head Lights: OFF"); else Serial.println("Head Lights: ON");
-   }
-}
-#endif
-
 
 void startupAnimation() {
     int lowtime = 200;
@@ -270,9 +213,6 @@ void startupAnimation() {
 }
 
 void loop() {
-  #ifdef DEBUG
-  readCommand();
-  #endif
   // Lights management
   // Light pulses: 2 quick flashes per second
   unsigned long currentMillis = millis();
@@ -402,25 +342,24 @@ ISR(PCINT2_vect){
   //Channel 1=========================================
   if(last_channel_1 == 0 && PIND & B00000100 ){         //Input 2 changed from 0 to 1 RISING
     last_channel_1 = 1;                                 //Remember current input state
-    //last_warn_status = millis();
-    last_armed_status = millis();
   }
   else if(last_channel_1 == 1 && !(PIND & B00000100)){  //Input 2 from 1 to 0 FALLING
     last_channel_1 = 0;                                 //Remember current input state
+    last_arm_pulse = millis();
   }
   //Channel 2=========================================
   if(last_channel_2 == 0 && PIND & B00001000 ){         //Input 3 changed from 0 to 1
     last_channel_2 = 1;                                 //Remember current input state
-    //last_gps_status = millis();
+    last_warn_change = millis();
   }
   else if(last_channel_2 == 1 && !(PIND & B00001000)){  //Input 3 changed from 1 to 0
     last_channel_2 = 0;                                 //Remember current input state
+    last_warn_change = millis();
   }
   //Channel 3=========================================
   if(last_channel_3 == 0 && PIND & B00010000 ){         //Input 4 changed from 0 to 1
     last_channel_3 = 1;                                 //Remember current input state
-    //last_armed_status = millis();
-    last_armed_status = millis();
+    last_gps_pulse = millis();
   }
   else if(last_channel_3 == 1 && !(PIND & B00010000)){  //Input 4 changed from 1 to 0
     last_channel_3 = 0;                                 //Remember current input state
@@ -428,7 +367,7 @@ ISR(PCINT2_vect){
   //Channel 4=========================================
   if(last_channel_4 == 0 && PIND & B00100000 ){         //Input 4 changed from 0 to 1
     last_channel_4 = 1;                                 //Remember current input state
-    timer_4 = micros();                                 //Set timer_4 to micros()
+    timer_4 = micros();
   }
   else if(last_channel_4 == 1 && !(PIND & B00100000)){  //Input 4 changed from 1 to 0
     last_channel_4 = 0;                                 //Remember current input state
