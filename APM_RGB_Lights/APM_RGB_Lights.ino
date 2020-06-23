@@ -4,9 +4,10 @@
 
 #define BRIGHTNESS  255  // Put 0 to switch off all leds
 
-#define DATA_PIN_STATUS 7
-#define DATA_PIN_FRONT 8
-#define DATA_PIN_BACK 9
+#define DATA_PIN_FRONT 7
+#define DATA_PIN_BACK 8
+#define DATA_PIN_STATUS 9
+
 
 #define DEBUG
 
@@ -83,6 +84,9 @@ CRGB led_status_off[NUM_MODOS]           = { CRGB::Black,              CRGB::Bla
 
 
 void setup() {
+  #ifdef DEBUG
+  Serial.begin(57600);
+  #endif
 
   //Arduino (Atmega) pins default to inputs, so they don't need to be explicitly declared as inputs
   PCICR |= (1 << PCIE2);    // set PCIE0 to enable PCMSK0 scan
@@ -107,7 +111,6 @@ void setup() {
 
 void setMode(byte mode) {
   if (led_mode != mode) {
-
     led_mode = mode;
     if (mode == MODE_ARMED_GPS) {
       time_on = 20;
@@ -122,6 +125,30 @@ void setMode(byte mode) {
       time_off = 80;
       time_cycle = 400;
     }
+
+
+    #ifdef DEBUG
+      switch(led_mode) {
+        case 0 :
+          Serial.println("MODE_WARNING");  
+          break;
+        case 1 :
+          Serial.println("MODE_DISARMED_NO_GPS");
+          break;
+        case 2:
+          Serial.println("MODE_DISARMED_GPS");
+          break;
+        case 3:
+          Serial.println("MODE_ARMED_NO_GPS");
+          break;
+        case 4:
+          Serial.println("MODE_ARMED_GPS");
+          break;
+      }
+      
+    #endif
+
+    
   }
 }
 
@@ -144,9 +171,8 @@ void updateState(unsigned long currentTime) {
   if (receiver_input_channel_4 > 1520) {
     front_lights_disabled = true;  
   } else {
-    front_lights_disabled = true;  
+    front_lights_disabled = false;  
   }
-  
 }
 
 void startupAnimation() {
@@ -359,10 +385,11 @@ ISR(PCINT2_vect){
   //Channel 3=========================================
   if(last_channel_3 == 0 && PIND & B00010000 ){         //Input 4 changed from 0 to 1
     last_channel_3 = 1;                                 //Remember current input state
-    last_gps_pulse = millis();
+    
   }
   else if(last_channel_3 == 1 && !(PIND & B00010000)){  //Input 4 changed from 1 to 0
     last_channel_3 = 0;                                 //Remember current input state
+    last_gps_pulse = millis();
   }
   //Channel 4=========================================
   if(last_channel_4 == 0 && PIND & B00100000 ){         //Input 4 changed from 0 to 1
