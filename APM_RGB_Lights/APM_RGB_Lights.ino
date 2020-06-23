@@ -16,15 +16,19 @@
 #define MODE_DISARMED_GPS 2
 #define MODE_ARMED_NO_GPS 3
 #define MODE_ARMED_GPS 4
+#define MODE_WAIT_APM 5
 
 
 const unsigned int arm_gps_pulse_width = 500;
 const unsigned int warn_delay_time = 5000;
 
+const unsigned int warn_arm_time = 3000;
+const unsigned int warn_disarm_time = 100;
 
 unsigned long last_arm_pulse = 0;
 unsigned long last_gps_pulse = 0;
 unsigned long last_warn_change = 0;
+unsigned long warn_pulse_width = 0;
 
 // Lights flashing adjustment
 unsigned long previousMillis = 0;     // will store last time LED was updated
@@ -51,36 +55,36 @@ CRGB leds_back[NUM_LEDS];
 byte led_state = 0;
 
 
-#define NUM_MODOS 5
-byte led_mode = MODE_DISARMED_NO_GPS;
+#define NUM_MODOS 6
+byte led_mode = MODE_WAIT_APM;
 
-                                           // MODE WARNING              DISARMED_NO_GPS             DISARMED_GPS                ARMED_NO_GPS                ARMED_GPS  
-CRGB led_front_on1[NUM_MODOS][NUM_LEDS]  = {{CRGB::Red,  CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}};
-CRGB led_front_off1[NUM_MODOS][NUM_LEDS] = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}};
-CRGB led_front_on2[NUM_MODOS][NUM_LEDS]  = {{CRGB::Red,  CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}};
-CRGB led_front_off2[NUM_MODOS][NUM_LEDS] = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}};
-CRGB led_front_on3[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Red},  {CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}};
-CRGB led_front_off3[NUM_MODOS][NUM_LEDS] = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}};
-CRGB led_front_on4[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}};
-CRGB led_front_off[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Black,CRGB::Black},   {CRGB::Black, CRGB::Black},{CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}};
+                                           // MODE WARNING              DISARMED_NO_GPS             DISARMED_GPS                ARMED_NO_GPS                ARMED_GPS            WAIT_APM
+CRGB led_front_on1[NUM_MODOS][NUM_LEDS]  = {{CRGB::Red,  CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Purple,CRGB::Purple}};
+CRGB led_front_off1[NUM_MODOS][NUM_LEDS] = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Purple,CRGB::Purple}};
+CRGB led_front_on2[NUM_MODOS][NUM_LEDS]  = {{CRGB::Red,  CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Purple,CRGB::Purple}};
+CRGB led_front_off2[NUM_MODOS][NUM_LEDS] = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Purple,CRGB::Purple}};
+CRGB led_front_on3[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Red},  {CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Purple,CRGB::Purple}};
+CRGB led_front_off3[NUM_MODOS][NUM_LEDS] = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Black,CRGB::Black}};
+CRGB led_front_on4[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Black,CRGB::Black}};
+CRGB led_front_off[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Black,CRGB::Black},   {CRGB::Black, CRGB::Black},{CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Black,CRGB::Black}};
 
-CRGB led_back_on1[NUM_MODOS][NUM_LEDS]   = {{CRGB::Black,CRGB::Black},{CRGB::Yellow, CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Green,CRGB::Green}};
-CRGB led_back_off1[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Yellow ,CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Black,CRGB::Black}};
-CRGB led_back_on2[NUM_MODOS][NUM_LEDS]   = {{CRGB::Red,  CRGB::Black},{CRGB::Yellow, CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Green,CRGB::Green}};    
-CRGB led_back_off2[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Yellow ,CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Black,CRGB::Black}};
-CRGB led_back_on3[NUM_MODOS][NUM_LEDS]   = {{CRGB::Black,CRGB::Red},  {CRGB::Yellow, CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Black,CRGB::Black}};    
-CRGB led_back_off3[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Yellow ,CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Black,CRGB::Black}};
-CRGB led_back_on4[NUM_MODOS][NUM_LEDS]   = {{CRGB::Red,  CRGB::Red},  {CRGB::Yellow, CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::LightGreen,CRGB::LightGreen}};    
-CRGB led_back_off[NUM_MODOS][NUM_LEDS]   = {{CRGB::Black,CRGB::Black},{CRGB::Black , CRGB::Black}, {CRGB::Black, CRGB::Black},{CRGB::Black,CRGB::Black},  {CRGB::Black,CRGB::Black}};
+CRGB led_back_on1[NUM_MODOS][NUM_LEDS]   = {{CRGB::Black,CRGB::Black},{CRGB::Yellow, CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Green,CRGB::Green},           {CRGB::Purple,CRGB::Purple}};
+CRGB led_back_off1[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Yellow ,CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Black,CRGB::Black},           {CRGB::Purple,CRGB::Purple}};
+CRGB led_back_on2[NUM_MODOS][NUM_LEDS]   = {{CRGB::Red,  CRGB::Black},{CRGB::Yellow, CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Green,CRGB::Green},           {CRGB::Purple,CRGB::Purple}};    
+CRGB led_back_off2[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Yellow ,CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Black,CRGB::Black},           {CRGB::Purple,CRGB::Purple}};
+CRGB led_back_on3[NUM_MODOS][NUM_LEDS]   = {{CRGB::Black,CRGB::Red},  {CRGB::Yellow, CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Black,CRGB::Black},           {CRGB::Purple,CRGB::Purple}};    
+CRGB led_back_off3[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Yellow ,CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Black,CRGB::Black},           {CRGB::Black,CRGB::Black}};
+CRGB led_back_on4[NUM_MODOS][NUM_LEDS]   = {{CRGB::Red,  CRGB::Red},  {CRGB::Yellow, CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::LightGreen,CRGB::LightGreen}, {CRGB::Black,CRGB::Black}};    
+CRGB led_back_off[NUM_MODOS][NUM_LEDS]   = {{CRGB::Black,CRGB::Black},{CRGB::Black , CRGB::Black}, {CRGB::Black, CRGB::Black},{CRGB::Black,CRGB::Black},  {CRGB::Black,CRGB::Black},           {CRGB::Black,CRGB::Black}};
 
-CRGB led_status_on1[NUM_MODOS]           = { CRGB::Red,                CRGB::Blue,                  CRGB::Cyan,                 CRGB::Red,                 CRGB::Black };
-CRGB led_status_off1[NUM_MODOS]          = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black };
-CRGB led_status_on2[NUM_MODOS]           = { CRGB::Red,                CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black };
-CRGB led_status_off2[NUM_MODOS]          = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black };
-CRGB led_status_on3[NUM_MODOS]           = { CRGB::Red,                CRGB::Yellow,                CRGB::Green,                CRGB::Yellow,              CRGB::Black };
-CRGB led_status_off3[NUM_MODOS]          = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black };
-CRGB led_status_on4[NUM_MODOS]           = { CRGB::Red,                CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black };
-CRGB led_status_off[NUM_MODOS]           = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black };
+CRGB led_status_on1[NUM_MODOS]           = { CRGB::Red,                CRGB::Blue,                  CRGB::Cyan,                 CRGB::Red,                 CRGB::Black,                         CRGB::Pink};
+CRGB led_status_off1[NUM_MODOS]          = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Black };
+CRGB led_status_on2[NUM_MODOS]           = { CRGB::Red,                CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Purple };
+CRGB led_status_off2[NUM_MODOS]          = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Black };
+CRGB led_status_on3[NUM_MODOS]           = { CRGB::Red,                CRGB::Yellow,                CRGB::Green,                CRGB::Yellow,              CRGB::Black,                         CRGB::Pink };
+CRGB led_status_off3[NUM_MODOS]          = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Black };
+CRGB led_status_on4[NUM_MODOS]           = { CRGB::Red,                CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Purple };
+CRGB led_status_off[NUM_MODOS]           = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Black };
 
 
 void setup() {
@@ -153,20 +157,23 @@ void setMode(byte mode) {
 }
 
 void updateState(unsigned long currentTime) {
-  if (currentTime - last_arm_pulse <= arm_gps_pulse_width) armed = false; else armed = true;
-  if (currentTime - last_gps_pulse <= arm_gps_pulse_width) gpsfix = false; else gpsfix = true;
-  if (currentTime - last_warn_change >= warn_delay_time) warning = false; else warning = true;
-  
-  if (warning) {
-    setMode(MODE_WARNING);
-  } else {
-    if (armed) {
-      if (gpsfix) setMode(MODE_ARMED_GPS); else setMode(MODE_ARMED_NO_GPS);
-    } else {
-      if (gpsfix) setMode(MODE_DISARMED_GPS); else setMode(MODE_DISARMED_NO_GPS);
-    }
-  }
 
+  if (last_arm_pulse == 0 and last_gps_pulse == 0) setMode(MODE_WAIT_APM); else {
+    if (currentTime - last_arm_pulse <= arm_gps_pulse_width) armed = false; else armed = true;
+    if (currentTime - last_gps_pulse <= arm_gps_pulse_width) gpsfix = false; else gpsfix = true;
+    
+    if (currentTime - last_warn_change >= warn_delay_time) warning = false; else warning = true;
+    
+    if (warning) {
+      setMode(MODE_WARNING);
+    } else {
+      if (armed) {
+        if (gpsfix) setMode(MODE_ARMED_GPS); else setMode(MODE_ARMED_NO_GPS);
+      } else {
+        if (gpsfix) setMode(MODE_DISARMED_GPS); else setMode(MODE_DISARMED_NO_GPS);
+      }
+    }
+  } // end wait apm
   // Disable Lights if receiver input is high
   if (receiver_input_channel_4 > 1520) {
     front_lights_disabled = true;  
@@ -365,7 +372,7 @@ void loop() {
 }
 
 ISR(PCINT2_vect){
-  //Channel 1=========================================
+  //Channel 1 MONITOR ARM STATE
   if(last_channel_1 == 0 && PIND & B00000100 ){         //Input 2 changed from 0 to 1 RISING
     last_channel_1 = 1;                                 //Remember current input state
   }
@@ -373,19 +380,20 @@ ISR(PCINT2_vect){
     last_channel_1 = 0;                                 //Remember current input state
     last_arm_pulse = millis();
   }
-  //Channel 2=========================================
+  //Channel 2 MONITOR BEEPER WARNINGS
   if(last_channel_2 == 0 && PIND & B00001000 ){         //Input 3 changed from 0 to 1
     last_channel_2 = 1;                                 //Remember current input state
-    last_warn_change = millis();
+    timer_2 = millis();
+    last_warn_change = timer_2;
   }
   else if(last_channel_2 == 1 && !(PIND & B00001000)){  //Input 3 changed from 1 to 0
     last_channel_2 = 0;                                 //Remember current input state
     last_warn_change = millis();
+    warn_pulse_width = last_warn_change - timer_2;
   }
-  //Channel 3=========================================
+  //Channel 3 MONITOR GPS PULSES
   if(last_channel_3 == 0 && PIND & B00010000 ){         //Input 4 changed from 0 to 1
     last_channel_3 = 1;                                 //Remember current input state
-    
   }
   else if(last_channel_3 == 1 && !(PIND & B00010000)){  //Input 4 changed from 1 to 0
     last_channel_3 = 0;                                 //Remember current input state
