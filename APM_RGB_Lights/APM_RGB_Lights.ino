@@ -8,7 +8,6 @@
 #define DATA_PIN_BACK 8
 #define DATA_PIN_STATUS 9
 
-
 #define DEBUG
 
 #define MODE_WARNING 0
@@ -21,13 +20,11 @@
 
 const unsigned int arm_gps_pulse_width = 500;
 const unsigned int warn_delay_time = 5000;
-
 const unsigned int warn_arm_time = 3000;
 const unsigned int warn_disarm_time = 100;
 
-unsigned long last_arm_pulse = 0;
-unsigned long last_gps_pulse = 0;
-unsigned long last_warn_change = 0;
+unsigned long arm_pulse_width = 0;
+unsigned long gps_pulse_width = 0;
 unsigned long warn_pulse_width = 0;
 
 // Lights flashing adjustment
@@ -58,6 +55,7 @@ byte led_state = 0;
 #define NUM_MODOS 6
 byte led_mode = MODE_WAIT_APM;
 
+byte last_mode = MODE_WAIT_APM;
                                            // MODE WARNING              DISARMED_NO_GPS             DISARMED_GPS                ARMED_NO_GPS                ARMED_GPS            WAIT_APM
 CRGB led_front_on1[NUM_MODOS][NUM_LEDS]  = {{CRGB::Red,  CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Purple,CRGB::Purple}};
 CRGB led_front_off1[NUM_MODOS][NUM_LEDS] = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Purple,CRGB::Purple}};
@@ -129,41 +127,21 @@ void setMode(byte mode) {
       time_off = 80;
       time_cycle = 400;
     }
-
-
-    #ifdef DEBUG
-      switch(led_mode) {
-        case 0 :
-          Serial.println("MODE_WARNING");  
-          break;
-        case 1 :
-          Serial.println("MODE_DISARMED_NO_GPS");
-          break;
-        case 2:
-          Serial.println("MODE_DISARMED_GPS");
-          break;
-        case 3:
-          Serial.println("MODE_ARMED_NO_GPS");
-          break;
-        case 4:
-          Serial.println("MODE_ARMED_GPS");
-          break;
-      }
-      
-    #endif
-
-    
   }
 }
 
 void updateState(unsigned long currentTime) {
 
-  if (last_arm_pulse == 0 and last_gps_pulse == 0) setMode(MODE_WAIT_APM); else {
-    if (currentTime - last_arm_pulse <= arm_gps_pulse_width) armed = false; else armed = true;
-    if (currentTime - last_gps_pulse <= arm_gps_pulse_width) gpsfix = false; else gpsfix = true;
-    
-    if (currentTime - last_warn_change >= warn_delay_time) warning = false; else warning = true;
-    
+  if (currentTime - timer_1 > 500) {arm_pulse_width = 1;}
+  if (currentTime - timer_2 > 500) {warn_pulse_width = 1;}
+  if (currentTime - timer_3 > 500) {gps_pulse_width = 1;}
+  
+
+  if (timer_1 == 0) setMode(MODE_WAIT_APM); else {
+    if (arm_pulse_width == 1) armed = true; else armed = false;
+    if (gps_pulse_width == 1) gpsfix = true; else gpsfix = false;
+    if (warn_pulse_width > 90 and warn_pulse_width < 110) warning = true; else warning = false;
+
     if (warning) {
       setMode(MODE_WARNING);
     } else {
@@ -249,8 +227,41 @@ void loop() {
   // Lights management
   // Light pulses: 2 quick flashes per second
   unsigned long currentMillis = millis();
+
   int i=0;
+
   updateState(currentMillis);
+
+  #ifdef DEBUG
+    
+      String mode = "WAITAPM";
+      switch(led_mode) {
+        case 0 :
+          mode = "WARNING";  
+          break;
+        case 1 :
+          mode = "DIS_NOG";
+          break;
+        case 2:
+          mode = "DIS_FIX";  
+          break;
+        case 3:
+          mode = "ARM_NOG";  
+          break;
+        case 4:
+          mode = "ARM_FIX";  
+          break;
+        case 5:
+          mode = "WAITAPM";  
+          break;
+      }
+      Serial.println("State: "+ mode +" A:" + String(arm_pulse_width)+ " B: " + String(warn_pulse_width) + " G: " + String(gps_pulse_width)+ "CH4: "+String(receiver_input_channel_4));
+      
+    
+    #endif
+  
+
+  
   // Normal mode, lights on.
   if (currentMillis - previousMillis >= next_interval) {
     // Keep time last mode changed
@@ -371,33 +382,34 @@ void loop() {
   }
 }
 
+
 ISR(PCINT2_vect){
   //Channel 1 MONITOR ARM STATE
-  if(last_channel_1 == 0 && PIND & B00000100 ){         //Input 2 changed from 0 to 1 RISING
-    last_channel_1 = 1;                                 //Remember current input state
+  if(last_channel_1 == 0 && PIND & B00000100 ){         
+    last_channel_1 = 1;                                 
+    arm_pulse_width = millis() - timer_1;
   }
-  else if(last_channel_1 == 1 && !(PIND & B00000100)){  //Input 2 from 1 to 0 FALLING
-    last_channel_1 = 0;                                 //Remember current input state
-    last_arm_pulse = millis();
+  else if(last_channel_1 == 1 && !(PIND & B00000100)){  
+    last_channel_1 = 0;                                
+    timer_1 = millis();
   }
   //Channel 2 MONITOR BEEPER WARNINGS
-  if(last_channel_2 == 0 && PIND & B00001000 ){         //Input 3 changed from 0 to 1
-    last_channel_2 = 1;                                 //Remember current input state
+  if(last_channel_2 == 0 && PIND & B00001000 ){  
+    last_channel_2 = 1;                        
     timer_2 = millis();
-    last_warn_change = timer_2;
   }
-  else if(last_channel_2 == 1 && !(PIND & B00001000)){  //Input 3 changed from 1 to 0
-    last_channel_2 = 0;                                 //Remember current input state
-    last_warn_change = millis();
-    warn_pulse_width = last_warn_change - timer_2;
+  else if(last_channel_2 == 1 && !(PIND & B00001000)){ 
+    last_channel_2 = 0;                            
+    warn_pulse_width = millis() - timer_2;
   }
   //Channel 3 MONITOR GPS PULSES
-  if(last_channel_3 == 0 && PIND & B00010000 ){         //Input 4 changed from 0 to 1
-    last_channel_3 = 1;                                 //Remember current input state
+  if(last_channel_3 == 0 && PIND & B00010000 ){         
+    last_channel_3 = 1;                                
+    gps_pulse_width = millis() - timer_3;
   }
-  else if(last_channel_3 == 1 && !(PIND & B00010000)){  //Input 4 changed from 1 to 0
-    last_channel_3 = 0;                                 //Remember current input state
-    last_gps_pulse = millis();
+  else if(last_channel_3 == 1 && !(PIND & B00010000)){  
+    last_channel_3 = 0;                                 
+    timer_3 = millis();
   }
   //Channel 4=========================================
   if(last_channel_4 == 0 && PIND & B00100000 ){         //Input 4 changed from 0 to 1
