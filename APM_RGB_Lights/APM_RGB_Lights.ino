@@ -8,7 +8,7 @@
 #define DATA_PIN_BACK 8
 #define DATA_PIN_STATUS 9
 
-#define DEBUG
+//#define DEBUG
 
 #define MODE_WARNING 0
 #define MODE_DISARMED_NO_GPS 1
@@ -132,14 +132,16 @@ void setMode(byte mode) {
 
 void updateState(unsigned long currentTime) {
 
-  if (currentTime - timer_1 > 500) {arm_pulse_width = 1;}
-  if (currentTime - timer_2 > 500) {warn_pulse_width = 1;}
-  if (currentTime - timer_3 > 500) {gps_pulse_width = 1;}
+  if (currentTime - timer_1 > 800) {arm_pulse_width = 1;}
+  if (currentTime - timer_2 > 800) {warn_pulse_width = 1;}
+  if (currentTime - timer_3 > 800) {gps_pulse_width = 1;}
   
 
   if (timer_1 == 0) setMode(MODE_WAIT_APM); else {
     if (arm_pulse_width == 1) armed = true; else armed = false;
-    if (gps_pulse_width == 1) gpsfix = true; else gpsfix = false;
+    if (timer_3 == 0) gpsfix = false; else {
+      if (gps_pulse_width == 1) gpsfix = true; else gpsfix = false;  
+    }
     if (warn_pulse_width > 90 and warn_pulse_width < 110) warning = true; else warning = false;
 
     if (warning) {
@@ -255,7 +257,7 @@ void loop() {
           mode = "WAITAPM";  
           break;
       }
-      Serial.println("State: "+ mode +" A:" + String(arm_pulse_width)+ " B: " + String(warn_pulse_width) + " G: " + String(gps_pulse_width)+ "CH4: "+String(receiver_input_channel_4));
+      Serial.println("State: "+ mode +" A:" + String(arm_pulse_width)+ " B: " + String(warn_pulse_width) + " G: " + String(gps_pulse_width)+ " CH4: "+String(receiver_input_channel_4));
       
     
     #endif
