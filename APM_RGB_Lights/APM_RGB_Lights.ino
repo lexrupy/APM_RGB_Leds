@@ -1,7 +1,13 @@
+// Quick and Dirty APM Led Control
+// Features:
+// * Read led blink outputs from APM A4 and A6 and set the let pattern as status
+// * Read a PWM signal from a channel to disable front lights when the channel is high
+// * Include an analog read function to set a warning pattern when battery is lower than 11v.
+//
+
 #include <FastLED.h>
 
 #define NUM_LEDS 2
-
 #define BRIGHTNESS  255  // Put 0 to switch off all leds
 
 #define DATA_PIN_FRONT 7
@@ -16,6 +22,14 @@
 #define MODE_ARMED_NO_GPS 3
 #define MODE_ARMED_GPS 4
 #define MODE_WAIT_APM 5
+#define MODE_FAILSAFE 6
+
+#define DELAY_TIME 950
+
+
+// Configured for my voltage divider using 1M and 470k resistors
+// ~ 11 volts means a value bellow 690
+#define VOLTAGE_THRESHOLD 696
 
 
 const unsigned int arm_gps_pulse_width = 500;
@@ -23,13 +37,19 @@ const unsigned int warn_delay_time = 5000;
 const unsigned int warn_arm_time = 3000;
 const unsigned int warn_disarm_time = 100;
 
+const unsigned long time_to_batt_warn = 8000;  // 8000ms = 8 seconds
+
+
 unsigned long arm_pulse_width = 0;
 unsigned long gps_pulse_width = 0;
-unsigned long warn_pulse_width = 0;
+//unsigned long warn_pulse_width = 0;
 
 // Lights flashing adjustment
-unsigned long previousMillis = 0;     // will store last time LED was updated
-unsigned long next_interval = 0;      // next interval
+unsigned long previousMillis = 0;     
+unsigned long next_interval = 0;      
+
+unsigned long batt_low_time = 0;  
+bool batt_low_count_started = false;  
 
 int time_on = 20;
 int time_off = 80;
@@ -38,12 +58,13 @@ int time_cycle = 600;
 bool armed = false;
 bool gpsfix = false;
 bool warning = false;
+bool failsafe = false;
 bool front_lights_disabled = false;
 
 
-byte last_channel_1, last_channel_2, last_channel_3, last_channel_4;
+byte last_channel_1, last_channel_3, last_channel_4;
 int receiver_input_channel_4;
-unsigned long timer_1, timer_2, timer_3, timer_4;
+unsigned long timer_1, timer_3, timer_4;
 
 CRGB leds_status[1];
 CRGB leds_front[NUM_LEDS];
@@ -52,37 +73,37 @@ CRGB leds_back[NUM_LEDS];
 byte led_state = 0;
 
 
-#define NUM_MODOS 6
+#define NUM_MODOS 7
 byte led_mode = MODE_WAIT_APM;
 
 byte last_mode = MODE_WAIT_APM;
-                                           // MODE WARNING              DISARMED_NO_GPS             DISARMED_GPS                ARMED_NO_GPS                ARMED_GPS            WAIT_APM
-CRGB led_front_on1[NUM_MODOS][NUM_LEDS]  = {{CRGB::Red,  CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Purple,CRGB::Purple}};
-CRGB led_front_off1[NUM_MODOS][NUM_LEDS] = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Purple,CRGB::Purple}};
-CRGB led_front_on2[NUM_MODOS][NUM_LEDS]  = {{CRGB::Red,  CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Purple,CRGB::Purple}};
-CRGB led_front_off2[NUM_MODOS][NUM_LEDS] = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Purple,CRGB::Purple}};
-CRGB led_front_on3[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Red},  {CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Purple,CRGB::Purple}};
-CRGB led_front_off3[NUM_MODOS][NUM_LEDS] = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Black,CRGB::Black}};
-CRGB led_front_on4[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Black,CRGB::Black}};
-CRGB led_front_off[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Black,CRGB::Black},   {CRGB::Black, CRGB::Black},{CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red}, {CRGB::Black,CRGB::Black}};
+                                           // MODE WARNING              DISARMED_NO_GPS             DISARMED_GPS                ARMED_NO_GPS                ARMED_GPS                            WAIT_APM                     FAILSAFE/RTL
+CRGB led_front_on1[NUM_MODOS][NUM_LEDS]  = {{CRGB::Red,  CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red},               {CRGB::Purple,CRGB::Purple}, {CRGB::Orange,CRGB::Black}};
+CRGB led_front_off1[NUM_MODOS][NUM_LEDS] = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red},               {CRGB::Purple,CRGB::Purple}, {CRGB::Black,CRGB::Black}};
+CRGB led_front_on2[NUM_MODOS][NUM_LEDS]  = {{CRGB::Red,  CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red},               {CRGB::Purple,CRGB::Purple}, {CRGB::Orange,CRGB::Black}};
+CRGB led_front_off2[NUM_MODOS][NUM_LEDS] = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red},               {CRGB::Purple,CRGB::Purple}, {CRGB::Black,CRGB::Black}};
+CRGB led_front_on3[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Red},  {CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red},               {CRGB::Purple,CRGB::Purple}, {CRGB::Black,CRGB::Orange}};
+CRGB led_front_off3[NUM_MODOS][NUM_LEDS] = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red},               {CRGB::Black,CRGB::Black},   {CRGB::Black,CRGB::Black}};
+CRGB led_front_on4[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Cyan,CRGB::Cyan},     {CRGB::Cyan,CRGB::Cyan},   {CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red},               {CRGB::Black,CRGB::Black},   {CRGB::Black,CRGB::Black}};
+CRGB led_front_off[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Black,CRGB::Black},   {CRGB::Black, CRGB::Black},{CRGB::Red,  CRGB::Red},    {CRGB::Red,CRGB::Red},               {CRGB::Black,CRGB::Black},   {CRGB::Black,CRGB::Black}};
 
-CRGB led_back_on1[NUM_MODOS][NUM_LEDS]   = {{CRGB::Black,CRGB::Black},{CRGB::Yellow, CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Green,CRGB::Green},           {CRGB::Purple,CRGB::Purple}};
-CRGB led_back_off1[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Yellow ,CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Black,CRGB::Black},           {CRGB::Purple,CRGB::Purple}};
-CRGB led_back_on2[NUM_MODOS][NUM_LEDS]   = {{CRGB::Red,  CRGB::Black},{CRGB::Yellow, CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Green,CRGB::Green},           {CRGB::Purple,CRGB::Purple}};    
-CRGB led_back_off2[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Yellow ,CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Black,CRGB::Black},           {CRGB::Purple,CRGB::Purple}};
-CRGB led_back_on3[NUM_MODOS][NUM_LEDS]   = {{CRGB::Black,CRGB::Red},  {CRGB::Yellow, CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Black,CRGB::Black},           {CRGB::Purple,CRGB::Purple}};    
-CRGB led_back_off3[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Yellow ,CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::Black,CRGB::Black},           {CRGB::Black,CRGB::Black}};
-CRGB led_back_on4[NUM_MODOS][NUM_LEDS]   = {{CRGB::Red,  CRGB::Red},  {CRGB::Yellow, CRGB::Yellow},{CRGB::Green, CRGB::Green},{CRGB::Yellow,CRGB::Yellow},{CRGB::LightGreen,CRGB::LightGreen}, {CRGB::Black,CRGB::Black}};    
-CRGB led_back_off[NUM_MODOS][NUM_LEDS]   = {{CRGB::Black,CRGB::Black},{CRGB::Black , CRGB::Black}, {CRGB::Black, CRGB::Black},{CRGB::Black,CRGB::Black},  {CRGB::Black,CRGB::Black},           {CRGB::Black,CRGB::Black}};
+CRGB led_back_on1[NUM_MODOS][NUM_LEDS]   = {{CRGB::Black,CRGB::Black},{CRGB::Orange, CRGB::Orange},{CRGB::Green, CRGB::Green},{CRGB::Orange,CRGB::Orange},{CRGB::Green,CRGB::Green},           {CRGB::Purple,CRGB::Purple}, {CRGB::Black,CRGB::Black}};
+CRGB led_back_off1[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Orange ,CRGB::Orange},{CRGB::Green, CRGB::Green},{CRGB::Orange,CRGB::Orange},{CRGB::Black,CRGB::Black},           {CRGB::Purple,CRGB::Purple}, {CRGB::Black,CRGB::Black}};
+CRGB led_back_on2[NUM_MODOS][NUM_LEDS]   = {{CRGB::Red,  CRGB::Black},{CRGB::Orange, CRGB::Orange},{CRGB::Green, CRGB::Green},{CRGB::Orange,CRGB::Orange},{CRGB::Green,CRGB::Green},           {CRGB::Purple,CRGB::Purple}, {CRGB::Orange,CRGB::Black}};    
+CRGB led_back_off2[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Orange ,CRGB::Orange},{CRGB::Green, CRGB::Green},{CRGB::Orange,CRGB::Orange},{CRGB::Black,CRGB::Black},           {CRGB::Purple,CRGB::Purple}, {CRGB::Black,CRGB::Black}};
+CRGB led_back_on3[NUM_MODOS][NUM_LEDS]   = {{CRGB::Black,CRGB::Red},  {CRGB::Orange, CRGB::Orange},{CRGB::Green, CRGB::Green},{CRGB::Orange,CRGB::Orange},{CRGB::Black,CRGB::Black},           {CRGB::Purple,CRGB::Purple}, {CRGB::Black,CRGB::Orange}};    
+CRGB led_back_off3[NUM_MODOS][NUM_LEDS]  = {{CRGB::Black,CRGB::Black},{CRGB::Orange ,CRGB::Orange},{CRGB::Green, CRGB::Green},{CRGB::Orange,CRGB::Orange},{CRGB::Black,CRGB::Black},           {CRGB::Black,CRGB::Black},   {CRGB::Black,CRGB::Black}};
+CRGB led_back_on4[NUM_MODOS][NUM_LEDS]   = {{CRGB::Red,  CRGB::Red},  {CRGB::Orange, CRGB::Orange},{CRGB::Green, CRGB::Green},{CRGB::Orange,CRGB::Orange},{CRGB::LightGreen,CRGB::LightGreen}, {CRGB::Black,CRGB::Black},   {CRGB::Orange,CRGB::Orange}};    
+CRGB led_back_off[NUM_MODOS][NUM_LEDS]   = {{CRGB::Black,CRGB::Black},{CRGB::Black , CRGB::Black}, {CRGB::Black, CRGB::Black},{CRGB::Black,CRGB::Black},  {CRGB::Black,CRGB::Black},           {CRGB::Black,CRGB::Black},   {CRGB::Black,CRGB::Black}};
 
-CRGB led_status_on1[NUM_MODOS]           = { CRGB::Red,                CRGB::Blue,                  CRGB::Cyan,                 CRGB::Red,                 CRGB::Black,                         CRGB::Pink};
-CRGB led_status_off1[NUM_MODOS]          = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Black };
-CRGB led_status_on2[NUM_MODOS]           = { CRGB::Red,                CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Purple };
-CRGB led_status_off2[NUM_MODOS]          = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Black };
-CRGB led_status_on3[NUM_MODOS]           = { CRGB::Red,                CRGB::Yellow,                CRGB::Green,                CRGB::Yellow,              CRGB::Black,                         CRGB::Pink };
-CRGB led_status_off3[NUM_MODOS]          = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Black };
-CRGB led_status_on4[NUM_MODOS]           = { CRGB::Red,                CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Purple };
-CRGB led_status_off[NUM_MODOS]           = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Black };
+CRGB led_status_on1[NUM_MODOS]           = { CRGB::Red,                CRGB::Blue,                  CRGB::Cyan,                 CRGB::Red,                 CRGB::Black,                         CRGB::Pink,                 CRGB::Orange};
+CRGB led_status_off1[NUM_MODOS]          = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Black,                CRGB::Black};
+CRGB led_status_on2[NUM_MODOS]           = { CRGB::Red,                CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Purple,               CRGB::Orange};
+CRGB led_status_off2[NUM_MODOS]          = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Black,                CRGB::Black };
+CRGB led_status_on3[NUM_MODOS]           = { CRGB::Red,                CRGB::Orange,                CRGB::Green,                CRGB::Orange,              CRGB::Black,                         CRGB::Pink,                 CRGB::Orange };
+CRGB led_status_off3[NUM_MODOS]          = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Black,                CRGB::Black };
+CRGB led_status_on4[NUM_MODOS]           = { CRGB::Red,                CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Purple,               CRGB::Orange };
+CRGB led_status_off[NUM_MODOS]           = { CRGB::Black,              CRGB::Black,                 CRGB::Black,                CRGB::Black,               CRGB::Black,                         CRGB::Black,                CRGB::Black };
 
 
 void setup() {
@@ -101,6 +122,8 @@ void setup() {
   digitalWrite(2, HIGH);
   digitalWrite(3, HIGH);
   digitalWrite(4, HIGH);
+  
+  pinMode(A0, INPUT);
 
   //delay(5000); // sanity delay
   FastLED.addLeds<WS2811, DATA_PIN_STATUS, GRB>(leds_status, 1);
@@ -132,9 +155,9 @@ void setMode(byte mode) {
 
 void updateState(unsigned long currentTime) {
 
-  if (currentTime - timer_1 > 800) {arm_pulse_width = 1;}
-  if (currentTime - timer_2 > 800) {warn_pulse_width = 1;}
-  if (currentTime - timer_3 > 800) {gps_pulse_width = 1;}
+  if (currentTime - timer_1 > DELAY_TIME) {arm_pulse_width = 1;}
+  //if (currentTime - timer_2 > DELAY_TIME) {warn_pulse_width = 1;}
+  if (currentTime - timer_3 > DELAY_TIME) {gps_pulse_width = 1;}
   
 
   if (timer_1 == 0) setMode(MODE_WAIT_APM); else {
@@ -142,23 +165,32 @@ void updateState(unsigned long currentTime) {
     if (timer_3 == 0) gpsfix = false; else {
       if (gps_pulse_width == 1) gpsfix = true; else gpsfix = false;  
     }
-    if (warn_pulse_width > 90 and warn_pulse_width < 110) warning = true; else warning = false;
+    //if (warn_pulse_width > 90 and warn_pulse_width < 110) warning = true; else warning = false;
+    if (currentTime - batt_low_time >= time_to_batt_warn) warning = true; else warning = false;
 
     if (warning) {
       setMode(MODE_WARNING);
     } else {
-      if (armed) {
-        if (gpsfix) setMode(MODE_ARMED_GPS); else setMode(MODE_ARMED_NO_GPS);
+      if (failsafe) {
+        setMode(MODE_FAILSAFE);
       } else {
-        if (gpsfix) setMode(MODE_DISARMED_GPS); else setMode(MODE_DISARMED_NO_GPS);
+        if (armed) {
+          if (gpsfix) setMode(MODE_ARMED_GPS); else setMode(MODE_ARMED_NO_GPS);
+        } else {
+          if (gpsfix) setMode(MODE_DISARMED_GPS); else setMode(MODE_DISARMED_NO_GPS);
+        }        
       }
     }
   } // end wait apm
   // Disable Lights if receiver input is high
-  if (receiver_input_channel_4 > 1520) {
+  if (receiver_input_channel_4 > 1680) {
     front_lights_disabled = true;  
-  } else {
+    failsafe = false;
+  } else if (receiver_input_channel_4 < 1320){
     front_lights_disabled = false;  
+    failsafe = false;
+  } else {
+    failsafe = true;
   }
 }
 
@@ -230,6 +262,19 @@ void loop() {
   // Light pulses: 2 quick flashes per second
   unsigned long currentMillis = millis();
 
+  // record the time when voltage is low than threshold
+  int voltage = analogRead(A0); //#685 = 10.9v
+  if (voltage < VOLTAGE_THRESHOLD) { 
+    if (!batt_low_count_started) {
+      batt_low_time = currentMillis;
+      batt_low_count_started = true;
+    }
+  } else {
+    batt_low_time = currentMillis;
+    batt_low_count_started = false;
+    warning = false;
+  }
+
   int i=0;
 
   updateState(currentMillis);
@@ -257,7 +302,7 @@ void loop() {
           mode = "WAITAPM";  
           break;
       }
-      Serial.println("State: "+ mode +" A:" + String(arm_pulse_width)+ " B: " + String(warn_pulse_width) + " G: " + String(gps_pulse_width)+ " CH4: "+String(receiver_input_channel_4));
+      Serial.println("Voltage: "+String(voltage)+" State: "+ mode +" A:" + String(arm_pulse_width)+ " G: " + String(gps_pulse_width)+ " CH4: "+String(receiver_input_channel_4));
       
     
     #endif
@@ -277,6 +322,7 @@ void loop() {
           for(i=0;i<NUM_LEDS;i++){
             if (front_lights_disabled and not (led_mode==MODE_WARNING)) {
               leds_front[i]=CRGB::Black;
+              leds_status[0]=CRGB::Black;
             } else leds_front[i]=led_front_on1[led_mode][i];
             leds_back[i]=led_back_on1[led_mode][i];
           }
@@ -290,6 +336,7 @@ void loop() {
           for(i=0;i<NUM_LEDS;i++){
             if (front_lights_disabled and not (led_mode==MODE_WARNING)) {
               leds_front[i]=CRGB::Black;
+              leds_status[0]=CRGB::Black;
             } else leds_front[i]=led_front_off1[led_mode][i];
             leds_back[i]=led_back_off1[led_mode][i];
           }
@@ -303,6 +350,7 @@ void loop() {
           for(i=0;i<NUM_LEDS;i++){
             if (front_lights_disabled and not (led_mode==MODE_WARNING)) {
               leds_front[i]=CRGB::Black;
+              leds_status[0]=CRGB::Black;
             } else leds_front[i]=led_front_on2[led_mode][i];
             leds_back[i]=led_back_on2[led_mode][i];
           }
@@ -316,6 +364,7 @@ void loop() {
           for(i=0;i<NUM_LEDS;i++){
             if (front_lights_disabled and not (led_mode==MODE_WARNING)) {
               leds_front[i]=CRGB::Black;
+              leds_status[0]=CRGB::Black;
             } else leds_front[i]=led_front_off2[led_mode][i];
             leds_back[i]=led_back_off2[led_mode][i];
           }
@@ -329,6 +378,7 @@ void loop() {
           for(i=0;i<NUM_LEDS;i++){
             if (front_lights_disabled and not (led_mode==MODE_WARNING)) {
               leds_front[i]=CRGB::Black;
+              leds_status[0]=CRGB::Black;
             } else leds_front[i]=led_front_on3[led_mode][i];
             leds_back[i]=led_back_on3[led_mode][i];
           }
@@ -341,6 +391,7 @@ void loop() {
           for(i=0;i<NUM_LEDS;i++){
             if (front_lights_disabled and not (led_mode==MODE_WARNING)) {
               leds_front[i]=CRGB::Black;
+              leds_status[0]=CRGB::Black;
             } else leds_front[i]=led_front_off3[led_mode][i];
             leds_back[i]=led_back_off3[led_mode][i];
           }
@@ -354,6 +405,7 @@ void loop() {
           for(i=0;i<NUM_LEDS;i++){
             if (front_lights_disabled and not (led_mode==MODE_WARNING)) {
               leds_front[i]=CRGB::Black;
+              leds_status[0]=CRGB::Black;
             } else leds_front[i]=led_front_on4[led_mode][i];
             leds_back[i]=led_back_on4[led_mode][i];
           }
@@ -366,6 +418,7 @@ void loop() {
           for(i=0;i<NUM_LEDS;i++){
             if (front_lights_disabled and not (led_mode==MODE_WARNING)) {
               leds_front[i]=CRGB::Black;
+              leds_status[0]=CRGB::Black;
             } else leds_front[i]=led_front_off[led_mode][i];
             leds_back[i]=led_back_off[led_mode][i];
           }
@@ -396,14 +449,14 @@ ISR(PCINT2_vect){
     timer_1 = millis();
   }
   //Channel 2 MONITOR BEEPER WARNINGS
-  if(last_channel_2 == 0 && PIND & B00001000 ){  
-    last_channel_2 = 1;                        
-    timer_2 = millis();
-  }
-  else if(last_channel_2 == 1 && !(PIND & B00001000)){ 
-    last_channel_2 = 0;                            
-    warn_pulse_width = millis() - timer_2;
-  }
+//  if(last_channel_2 == 0 && PIND & B00001000 ){  
+//    last_channel_2 = 1;                        
+//    timer_2 = millis();
+//  }
+//  else if(last_channel_2 == 1 && !(PIND & B00001000)){ 
+//    last_channel_2 = 0;                            
+//    warn_pulse_width = millis() - timer_2;
+//  }
   //Channel 3 MONITOR GPS PULSES
   if(last_channel_3 == 0 && PIND & B00010000 ){         
     last_channel_3 = 1;                                
